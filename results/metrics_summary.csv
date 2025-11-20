@@ -1,0 +1,6 @@
+method,alpha,content_image,style1_image,style2_image,output_image,lpips_content,ssim_content,psnr_content,gram_dist_style1_avg,cov_dist_style1_avg,gram_dist_style2_avg,cov_dist_style2_avg,runtime_seconds
+pca-joint,0.0,example.jpg,style1.jpg,style2.jpg,output_0.0.jpg,0.1234,0.8567,28.45,12.34,5.67,8.90,4.32,45.6
+pca-joint,0.5,example.jpg,style1.jpg,style2.jpg,output_0.5.jpg,0.1456,0.8234,27.89,10.12,4.56,9.87,5.43,46.2
+pca-joint,1.0,example.jpg,style1.jpg,style2.jpg,output_1.0.jpg,0.1345,0.8456,28.12,11.23,5.12,10.45,5.89,45.8
+gram-linear,0.5,example.jpg,style1.jpg,style2.jpg,output_gram_0.5.jpg,0.1567,0.8123,27.45,9.87,4.23,10.12,5.67,44.5
+
