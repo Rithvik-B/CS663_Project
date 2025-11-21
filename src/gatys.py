@@ -26,6 +26,7 @@ from .io_utils import prepare_img, save_image, tensor_to_image
 from .config import DEFAULT_CONFIG, get_project_root
 from .save_utils import save_result_with_metadata, append_to_metrics_csv
 from .metrics import MetricsComputer
+from .utils import get_device
 from pathlib import Path
 import time
 
@@ -137,7 +138,8 @@ def gatys_style_transfer(
     if config is None:
         config = DEFAULT_CONFIG.copy()
     
-    device = torch.device(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
+    # Use get_device utility which properly handles CUDA availability
+    device = get_device(config.get('device'))
     
     # Load images
     content_img = prepare_img(content_img_path, config['height'], device)

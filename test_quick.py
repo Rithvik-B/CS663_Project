@@ -37,7 +37,8 @@ def test_baseline_gatys():
     config.update({
         'iterations': 10,  # Very low for testing
         'optimizer': 'lbfgs',
-        'height': 256  # Smaller for speed
+        'height': 256,  # Smaller for speed
+        'device': 'cpu'  # Force CPU for testing (avoids CUDA errors)
     })
     
     print(f"Running Gatys style transfer...")
@@ -89,7 +90,8 @@ def test_pca_mix():
     config.update({
         'iterations': 10,
         'optimizer': 'lbfgs',
-        'height': 256
+        'height': 256,
+        'device': 'cpu'  # Force CPU for testing (avoids CUDA errors)
     })
     
     print(f"Running PCA-Gatys style transfer (alpha=0.5)...")

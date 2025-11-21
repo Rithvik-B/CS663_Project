@@ -112,7 +112,7 @@ def main():
                     content_path = None
             
             if content_path and os.path.exists(content_path):
-                st.image(load_image(content_path), use_container_width=True)
+                st.image(load_image(content_path), width='stretch')
         
         with col2:
             st.subheader("Style Image 1")
@@ -132,7 +132,7 @@ def main():
                     style1_path = None
             
             if style1_path and os.path.exists(style1_path):
-                st.image(load_image(style1_path), use_container_width=True)
+                st.image(load_image(style1_path), width='stretch')
         
         with col3:
             st.subheader("Style Image 2")
@@ -152,10 +152,10 @@ def main():
                     style2_path = None
             
             if style2_path and os.path.exists(style2_path):
-                st.image(load_image(style2_path), use_container_width=True)
+                st.image(load_image(style2_path), width='stretch')
         
         # Run button
-        if st.button("🚀 Generate Style Transfer", type="primary", use_container_width=True):
+        if st.button("🚀 Generate Style Transfer", type="primary"):
             if not content_path or not style1_path:
                 st.error("Please provide content and style 1 images")
             elif method in ["PCA (joint)", "PCA (simple)", "Gram-linear", "Cov-linear"] and not style2_path:
@@ -239,7 +239,7 @@ def main():
                             
                             col1, col2 = st.columns(2)
                             with col1:
-                                st.image(result_np, caption="Generated Result", use_container_width=True)
+                                st.image(result_np, caption="Generated Result", width='stretch')
                                 
                                 # Show saved location
                                 st.info(f"**Saved to:** `{saved_image_path}`")
@@ -312,7 +312,7 @@ def main():
                         else:
                             # Fallback if file not found
                             result_np = tensor_to_image(result, denormalize=True)
-                            st.image(result_np, caption="Generated Result", use_container_width=True)
+                            st.image(result_np, caption="Generated Result", width='stretch')
                             st.warning("Could not locate saved file, but result is available above.")
                     
                     except Exception as e:
@@ -349,7 +349,12 @@ def main():
             )
             
             if st.button("🚀 Run Batch Experiment"):
-                with st.spinner("Running batch experiment..."):
+                # Progress tracking
+                progress_container = st.container()
+                status_text = st.empty()
+                progress_bar = st.progress(0)
+                
+                with progress_container:
                     from src.experiments import run_alpha_grid
                     
                     content_path = os.path.join(get_data_path("content_examples"), content_choice)
@@ -372,17 +377,37 @@ def main():
                         'device': device
                     })
                     
+                    # Progress callback for Streamlit
+                    def batch_progress_callback(message, current, total, loss_dict):
+                        # Update progress bar
+                        if total > 0:
+                            progress = current / total
+                            progress_bar.progress(progress)
+                        
+                        # Update status text
+                        if loss_dict:
+                            loss_str = f" | Loss: {loss_dict.get('total_loss', 0):.2e}"
+                        else:
+                            loss_str = ""
+                        status_text.text(f"{message} ({current}/{total}){loss_str}")
+                    
                     df, grid_paths = run_alpha_grid(
                         content_path, style1_path, style2_path,
-                        alphas, selected_methods, output_dir, config
+                        alphas, selected_methods, output_dir, config,
+                        progress_callback=batch_progress_callback
                     )
                     
+                    progress_bar.progress(1.0)
+                    status_text.text("✅ Batch experiment complete!")
                     st.success("Batch experiment complete!")
                     
                     # Display grids
                     for method, grid_path in grid_paths.items():
                         st.subheader(f"{method} Grid")
-                        st.image(grid_path, use_container_width=True)
+                        if os.path.exists(grid_path):
+                            st.image(grid_path, width='stretch')
+                        else:
+                            st.warning(f"Grid not found: {grid_path}")
                     
                     # Display metrics
                     if not df.empty:
@@ -411,7 +436,7 @@ def main():
                 selected_file = st.selectbox("Select result", [f.name for f in result_files])
                 if selected_file:
                     img_path = os.path.join(results_dir, selected_file)
-                    st.image(load_image(img_path), use_container_width=True)
+                    st.image(load_image(img_path), width='stretch')
             else:
                 st.info("No precomputed results found")
         else:

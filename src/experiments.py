@@ -25,7 +25,8 @@ def run_alpha_grid(
     methods: List[str],
     output_dir: str,
     config: Optional[Dict] = None,
-    compute_metrics: bool = True
+    compute_metrics: bool = True,
+    progress_callback: Optional[callable] = None
 ) -> Tuple[pd.DataFrame, Dict[str, str]]:
     """
     Run style transfer across multiple alpha values and methods, create grids.
@@ -48,6 +49,11 @@ def run_alpha_grid(
     
     os.makedirs(output_dir, exist_ok=True)
     
+    # Extract names for grid filename
+    content_name = Path(content_img_path).stem
+    style1_name = Path(style1_img_path).stem
+    style2_name = Path(style2_img_path).stem
+    
     # Load images once
     from .io_utils import prepare_img
     from .utils import get_device
@@ -68,11 +74,21 @@ def run_alpha_grid(
     
     metrics_computer = MetricsComputer(device=device, model_name=config['model']) if compute_metrics else None
     
+    total_runs = len(methods) * len(alphas)
+    current_run = 0
+    
     for method in methods:
         method_results = []
         
+        if progress_callback:
+            progress_callback(f"Starting method: {method}", current_run, total_runs, None)
+        
         for alpha in alphas:
-            print(f"Running {method} with alpha={alpha:.2f}")
+            current_run += 1
+            print(f"Running {method} with alpha={alpha:.2f} ({current_run}/{total_runs})")
+            
+            if progress_callback:
+                progress_callback(f"{method} (α={alpha:.2f})", current_run, total_runs, None)
             
             start_time = time.time()
             
@@ -80,15 +96,26 @@ def run_alpha_grid(
             try:
                 log_batch_run(f"Starting {method} with alpha={alpha:.2f} for {Path(content_img_path).name}")
                 
+                # Progress callback for individual runs
+                def run_progress_callback(iteration, loss_dict):
+                    if progress_callback:
+                        progress_callback(
+                            f"{method} (α={alpha:.2f}) - Iter {iteration}",
+                            current_run, total_runs,
+                            loss_dict
+                        )
+                
                 if method == 'gatys-style1':
                     result, _ = gatys_style_transfer(
                         content_img_path, style1_img_path,
-                        output_path=None, config=config
+                        output_path=None, config=config,
+                        progress_callback=run_progress_callback
                     )
                 elif method == 'gatys-style2':
                     result, _ = gatys_style_transfer(
                         content_img_path, style2_img_path,
-                        output_path=None, config=config
+                        output_path=None, config=config,
+                        progress_callback=run_progress_callback
                     )
                 else:
                     # Map method names
@@ -103,7 +130,8 @@ def run_alpha_grid(
                     result, _ = pca_gatys_style_transfer(
                         content_img_path, style1_img_path, style2_img_path,
                         alpha=alpha, mixing_method=mixing_method,
-                        output_path=None, config=config
+                        output_path=None, config=config,
+                        progress_callback=run_progress_callback
                     )
                 
                 runtime = time.time() - start_time
