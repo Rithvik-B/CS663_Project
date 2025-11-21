@@ -73,7 +73,8 @@ def main():
         # Optimization settings
         st.subheader("Optimization")
         optimizer = st.selectbox("Optimizer", ["lbfgs", "adam"])
-        iterations = st.number_input("Iterations", 100, 5000, 1000 if optimizer == "lbfgs" else 3000, step=100)
+        iterations = st.number_input("Iterations", 10, 5000, 1000 if optimizer == "lbfgs" else 3000, step=10, 
+                                     help="Minimum 10 for quick testing, 100+ recommended for quality")
         init_method = st.selectbox("Initialization", ["content", "random", "style"])
         height = st.number_input("Image Height", 256, 1024, 400, step=64)
         

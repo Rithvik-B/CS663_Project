@@ -299,3 +299,42 @@ def gatys_style_transfer(
     
     return result, metrics
 
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Gatys Neural Style Transfer")
+    parser.add_argument("--content", type=str, required=True, help="Path to content image")
+    parser.add_argument("--style", type=str, required=True, help="Path to style image")
+    parser.add_argument("--out", type=str, help="Output image path (optional, auto-saves if not provided)")
+    parser.add_argument("--iters", type=int, default=1000, help="Number of iterations")
+    parser.add_argument("--height", type=int, default=400, help="Image height")
+    parser.add_argument("--optimizer", type=str, default="lbfgs", choices=["lbfgs", "adam"])
+    parser.add_argument("--content_weight", type=float, default=1e5)
+    parser.add_argument("--style_weight", type=float, default=3e4)
+    parser.add_argument("--tv_weight", type=float, default=1e0)
+    
+    args = parser.parse_args()
+    
+    config = DEFAULT_CONFIG.copy()
+    config.update({
+        'iterations': args.iters if args.optimizer == 'lbfgs' else None,
+        'adam_iterations': args.iters if args.optimizer == 'adam' else None,
+        'height': args.height,
+        'optimizer': args.optimizer,
+        'content_weight': args.content_weight,
+        'style_weight': args.style_weight,
+        'tv_weight': args.tv_weight
+    })
+    
+    result, metrics = gatys_style_transfer(
+        args.content, args.style,
+        output_path=args.out,
+        config=config
+    )
+    
+    if args.out:
+        print(f"Result also saved to: {args.out}")
+    print(f"Final loss: {metrics['total_loss'][-1]:.4f}")
+    print(f"✅ Auto-saved to: data/outputs/ (check most recent .jpg and .json files)")
+
