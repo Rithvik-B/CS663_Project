@@ -135,6 +135,10 @@ def gatys_style_transfer(
     
     device = torch.device(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
     
+    # Enable cuDNN benchmarking for faster convolutions (if GPU available)
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+    
     # Load images
     content_img = prepare_img(content_img_path, config['height'], device)
     style_img = prepare_img(style_img_path, config['height'], device)
@@ -142,14 +146,16 @@ def gatys_style_transfer(
     # Initialize feature extractor
     feature_extractor = VGGFeatureExtractor(model_name=config['model'], device=device)
     
-    # Extract target representations
-    target_content = feature_extractor.get_content_features(content_img).squeeze(0)
-    style_features = feature_extractor.get_style_features(style_img)
+    # Extract target representations (precompute once with no_grad)
+    with torch.no_grad():
+        target_content = feature_extractor.get_content_features(content_img).squeeze(0)
+        style_features = feature_extractor.get_style_features(style_img)
     
-    # Compute target Gram matrices
-    target_grams = {}
-    for layer_name, features in style_features.items():
-        target_grams[layer_name] = gram_matrix(features)
+    # Compute target Gram matrices (precompute once)
+    with torch.no_grad():
+        target_grams = {}
+        for layer_name, features in style_features.items():
+            target_grams[layer_name] = gram_matrix(features)
     
     # Initialize optimizing image
     init_method = config.get('init_method', 'content')
@@ -186,14 +192,16 @@ def gatys_style_transfer(
             total_loss.backward()
             optimizer.step()
             
-            # Clamp values
             with torch.no_grad():
                 optimizing_img.data.clamp_(0, 255)
             
-            metrics['total_loss'].append(total_loss.item())
-            metrics['content_loss'].append(content_loss.item())
-            metrics['style_loss'].append(style_loss.item())
-            metrics['tv_loss'].append(tv_loss.item())
+            # Log metrics (minimize CPU syncs)
+            if cnt % 10 == 0 or cnt == iterations - 1:
+                with torch.no_grad():
+                    metrics['total_loss'].append(total_loss.item())
+                    metrics['content_loss'].append(content_loss.item())
+                    metrics['style_loss'].append(style_loss.item())
+                    metrics['tv_loss'].append(tv_loss.item())
             
             if progress_callback:
                 progress_callback(cnt, {
@@ -210,27 +218,26 @@ def gatys_style_transfer(
         def closure():
             nonlocal cnt
             optimizer.zero_grad()
-            
             total_loss, content_loss, style_loss, tv_loss = build_gatys_loss(
                 feature_extractor, optimizing_img, target_content, target_grams, config
             )
-            
             total_loss.backward()
             
-            # Log metrics (outside gradient computation)
-            with torch.no_grad():
-                metrics['total_loss'].append(total_loss.item())
-                metrics['content_loss'].append(content_loss.item())
-                metrics['style_loss'].append(style_loss.item())
-                metrics['tv_loss'].append(tv_loss.item())
-                
-                if progress_callback:
-                    progress_callback(cnt, {
-                        'total_loss': total_loss.item(),
-                        'content_loss': content_loss.item(),
-                        'style_loss': style_loss.item(),
-                        'tv_loss': tv_loss.item()
-                    })
+            # Log metrics (minimize CPU syncs)
+            if cnt % 10 == 0 or cnt == iterations - 1:
+                with torch.no_grad():
+                    metrics['total_loss'].append(total_loss.item())
+                    metrics['content_loss'].append(content_loss.item())
+                    metrics['style_loss'].append(style_loss.item())
+                    metrics['tv_loss'].append(tv_loss.item())
+            
+            if progress_callback:
+                progress_callback(cnt, {
+                    'total_loss': total_loss.item(),
+                    'content_loss': content_loss.item(),
+                    'style_loss': style_loss.item(),
+                    'tv_loss': tv_loss.item()
+                })
             
             cnt += 1
             return total_loss

@@ -1,191 +1,143 @@
 # PCA-Mixed Neural Style Transfer
 
-A modular implementation of PCA-based style mixing for neural style transfer, extending the original Gatys et al. algorithm to support mixing two artistic styles using Principal Component Analysis of feature covariances.
+Implementation of PCA-based style mixing for neural style transfer with automatic saving of all outputs.
 
 ## Overview
 
-This project implements:
-
-- **Baseline Gatys NST**: Original neural style transfer algorithm
-- **PCA Style Mixing**: Two mixing strategies (simple & joint) using PCA decomposition
-- **Baseline Mixing Methods**: Gram-linear and covariance-linear interpolation for comparison
-- **Comprehensive Metrics**: LPIPS, SSIM, PSNR, Gram/covariance distances, and runtime
-- **Interactive UI**: Streamlit web interface for interactive style transfer
-- **Batch Experiments**: Scripts for generating grids and computing metrics
-
-## Installation
-
-1. Clone or navigate to the repository root
-2. Install dependencies:
-
-```bash
-cd final_project
-pip install -r requirements.txt
-```
-
-**Note**: For GPU acceleration, ensure you have CUDA-compatible PyTorch installed. The code will automatically use CPU if CUDA is unavailable.
+This project implements neural style transfer with the ability to mix two artistic styles using Principal Component Analysis (PCA) of feature covariances. Every run automatically saves images, per-iteration metrics, and metadata to organized folders.
 
 ## Quick Start
 
-### Single Style Transfer (CLI)
+### Command Line Interface
 
 ```bash
-# Run a single PCA mixed transfer
+# Run a single style transfer
 python -m src.pca_gatys \
-    --content data/content_examples/taj_mahal.jpg \
+    --content data/content_examples/tubingen.png \
     --style1 data/style_examples/vg_starry_night.jpg \
     --style2 data/style_examples/candy.jpg \
+    --method pca_joint \
     --alpha 0.5 \
-    --iters 400 \
-    --out results/taj_mix_0.5.jpg
+    --iters 100 \
+    --snapshot_interval 10 \
+    --seed 42
 ```
 
-### Using Scripts
+Outputs are automatically saved to `data/outputs/runs/`.
 
-```bash
-# Run single transfer
-bash scripts/run_single.sh \
-    --content ../data/content-images/taj_mahal.jpg \
-    --style1 ../data/style-images/vg_starry_night.jpg \
-    --style2 ../data/style-images/candy.jpg \
-    --alpha 0.5 \
-    --out results/output.jpg
-
-# Run grid across alpha values
-bash scripts/run_grid.sh \
-    --content ../data/content-images/taj_mahal.jpg \
-    --style1 ../data/style-images/vg_starry_night.jpg \
-    --style2 ../data/style-images/candy.jpg \
-    --alphas "0.0,0.25,0.5,0.75,1.0" \
-    --output results/grids
-
-# Evaluate metrics across output directory
-bash scripts/evaluate.sh \
-    --gen_dir data/outputs \
-    --content_dir data/content_examples \
-    --out_csv results/metrics_summary.csv
-```
-
-### Streamlit UI
-
-Launch the interactive web interface:
+### Streamlit Web Interface
 
 ```bash
 streamlit run app/streamlit_app.py
 ```
 
-The UI provides:
-- Image upload/selection from examples
-- Method selection (PCA joint/simple, Gram-linear, Cov-linear, Gatys)
-- Real-time parameter adjustment
-- Side-by-side comparisons
-- Metrics display
-- Batch experiment generation
+The interface provides three tabs:
+- **Run**: Execute a single style transfer with real-time progress
+- **Grid**: Run multiple alpha values or batch experiments
+- **Comparisons**: View and compare saved runs side-by-side
+
+## How It Works
+
+### PCA Style Mixing
+
+The implementation extends the original Gatys et al. algorithm to support mixing two styles:
+
+1. **Extract Features**: VGG-19 features from content and style images
+2. **Compute Covariances**: Style features are converted to covariance matrices
+3. **PCA Decomposition**: Covariances are decomposed into eigenvectors and eigenvalues
+4. **Mix Styles**: Two mixing strategies:
+   - **Simple PCA**: Uses first style's eigenvectors, mixes eigenvalues
+   - **Joint PCA**: Computes joint eigenvectors, then mixes eigenvalues
+5. **Optimize**: Gradient descent to match mixed style representation
+
+### Automatic Saving
+
+Every run creates a folder with:
+- **images/**: Snapshot images at specified intervals + final image
+- **metrics/**: Per-iteration metrics CSV and final metrics JSON
+- **meta.json**: Run configuration and metadata
+
+Folder naming: `YYYYMMDD_HHMMSS__content__style1__style2__method_a{ALPHA}_s{SEED}/`
+
+## Methods
+
+- **pca_joint**: Joint PCA mixing (recommended)
+- **pca_simple**: Simple PCA mixing
+- **gram-linear**: Linear interpolation of Gram matrices
+- **covariance-linear**: Linear interpolation of covariance matrices
+- **gatys**: Single style (original algorithm)
+
+## Key Features
+
+- **Exact Iteration Control**: No overshoot beyond requested iterations
+- **Automatic Saving**: All outputs saved without manual intervention
+- **Organized Structure**: Deterministic folder naming for easy tracking
+- **Comparisons**: Built-in tools to compare multiple runs
+- **Reproducible**: Seed-based initialization for consistent results
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+**Note**: For GPU acceleration, install CUDA-compatible PyTorch.
 
 ## Project Structure
 
 ```
 final_project/
-├── data/                    # Data directories
-│   ├── content_examples/    # Content images
-│   ├── style_examples/      # Style images
-│   └── outputs/             # Generated outputs
-├── src/                     # Source code
-│   ├── config.py           # Configuration and hyperparameters
-│   ├── io_utils.py         # Image I/O and visualization
-│   ├── vgg_features.py     # VGG feature extractor
-│   ├── pca_code.py         # PCA code extraction
-│   ├── mixing.py           # Mixing strategies
-│   ├── gatys.py            # Baseline Gatys NST
-│   ├── pca_gatys.py        # PCA-Gatys style transfer
-│   ├── metrics.py           # Evaluation metrics
-│   └── experiments.py      # Batch experiment orchestrator
 ├── app/
-│   └── streamlit_app.py    # Streamlit UI
-├── tests/                   # Unit tests
-├── scripts/                 # CLI scripts
-├── results/                 # Sample results and metrics
-└── requirements.txt         # Dependencies
+│   └── streamlit_app.py      # Web interface
+├── src/
+│   ├── runner.py             # Main execution API
+│   ├── pca_gatys.py          # PCA-Gatys implementation
+│   ├── gatys.py              # Baseline Gatys NST
+│   ├── pca_code.py           # PCA decomposition
+│   ├── mixing.py             # Style mixing strategies
+│   ├── vgg_features.py       # VGG feature extraction
+│   ├── metrics.py            # Evaluation metrics
+│   └── io_utils.py           # Image I/O utilities
+├── tests/                     # Unit tests
+├── data/
+│   ├── content_examples/     # Content images
+│   ├── style_examples/       # Style images
+│   └── outputs/runs/         # Generated outputs
+└── requirements.txt          # Dependencies
 ```
 
-## Methods
+## Tests
 
-### PCA Mixing Strategies
+```bash
+pytest tests/
+```
 
-1. **Simple PCA Mix**: Uses P₁ basis, mixes eigenvalues
-   - `D_mix = α·D₁ + (1-α)·diag(P₁ᵀ C₂ P₁)`
-
-2. **Joint PCA Mix**: Computes eigenvectors of (C₁+C₂)/2, then mixes
-   - `P_mix = eigenvectors((C₁ + C₂) / 2)`
-   - `D_mix = α·diag(P_mixᵀ C₁ P_mix) + (1-α)·diag(P_mixᵀ C₂ P_mix)`
-
-### Baseline Methods
-
-- **Gram-linear**: Linear interpolation of Gram matrices
-- **Covariance-linear**: Linear interpolation of covariance matrices
-- **Gatys (single style)**: Original algorithm with one style
+Tests verify:
+- Exact iteration counts (no overshoot)
+- All required files are saved correctly
+- Integration with Streamlit UI
 
 ## Configuration
 
-Default hyperparameters are in `src/config.py`. Key parameters:
+Key parameters:
+- `--iters`: Number of optimization iterations (exact count)
+- `--snapshot_interval`: Save image snapshot every N iterations
+- `--method`: Mixing method (see Methods section)
+- `--alpha`: Mixing coefficient (0.0 = style2, 1.0 = style1)
+- `--seed`: Random seed for reproducibility
+- `--height`: Target image height in pixels
 
-- `content_weight`: Weight for content loss (default: 1e5)
-- `style_weight`: Weight for style loss (default: 3e4)
-- `tv_weight`: Weight for total variation loss (default: 1e0)
-- `iterations`: Number of optimization iterations (default: 1000 for LBFGS, 3000 for Adam)
-- `height`: Target image height (default: 400)
-- `optimizer`: 'lbfgs' or 'adam' (default: 'lbfgs')
+## Output Format
 
-## Evaluation Metrics
-
-The project computes:
-
-- **LPIPS**: Learned Perceptual Image Patch Similarity (lower is better)
-- **SSIM**: Structural Similarity Index (higher is better, [0, 1])
-- **PSNR**: Peak Signal-to-Noise Ratio (higher is better, dB)
-- **Gram Distance**: Frobenius norm between Gram matrices (per layer)
-- **Covariance Distance**: Frobenius norm between covariance matrices (per layer)
-- **Runtime**: Elapsed time per transfer
-
-## Running Tests
-
-```bash
-# Run all tests
-pytest tests/
-
-# Run specific test file
-pytest tests/test_pca_code.py -v
-```
-
-## Expected Runtime
-
-- **Single transfer (LBFGS, 1000 iter)**: ~30-60 seconds on GPU, ~2-5 minutes on CPU
-- **Single transfer (Adam, 3000 iter)**: ~1-2 minutes on GPU, ~5-10 minutes on CPU
-- **Grid (5 alphas × 4 methods)**: ~10-20 minutes on GPU
-
-**Recommendation**: Use GPU (CUDA) for faster results. The code automatically falls back to CPU if GPU is unavailable.
-
-## Data Setup
-
-The project expects images in:
-- `data/content_examples/`: Content images
-- `data/style_examples/`: Style images
-
-You can create symbolic links to the parent repository's data:
-
-```bash
-# Linux/Mac
-ln -s ../../data/content-images data/content_examples
-ln -s ../../data/style-images data/style_examples
-
-# Windows (PowerShell)
-New-Item -ItemType SymbolicLink -Path data/content_examples -Target ..\..\data\content-images
-New-Item -ItemType SymbolicLink -Path data/style_examples -Target ..\..\data\style-images
-```
+Each run produces:
+- **images/iter_XXX.png**: Snapshot images
+- **metrics/metrics_summary.csv**: One row per iteration with losses and metrics
+- **metrics/final_metrics.json**: Final quality metrics (LPIPS, SSIM, etc.)
+- **meta.json**: Complete run metadata including timestamps and configuration
 
 ## Citation
 
-If you use this code, please cite the original Gatys et al. paper:
+If you use this code, please cite:
 
 ```bibtex
 @article{gatys2015neural,
@@ -199,21 +151,3 @@ If you use this code, please cite the original Gatys et al. paper:
 ## License
 
 See LICENSE file for details.
-
-## Examples
-
-Example outputs and metrics are available in `results/`:
-- Grid visualizations showing alpha interpolation
-- Metrics CSV files with quantitative comparisons
-- Sample stylized images
-
-## Troubleshooting
-
-**Import errors**: Ensure you're running from the `final_project/` directory or have added it to PYTHONPATH.
-
-**CUDA out of memory**: Reduce image height or batch size in config.
-
-**LPIPS/metrics not available**: Install missing dependencies: `pip install lpips scikit-image`
-
-**Slow performance**: Use GPU if available, or reduce iterations/image size for testing.
-

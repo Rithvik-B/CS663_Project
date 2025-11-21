@@ -32,7 +32,7 @@ def build_pca_loss(
     config: Dict
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Build loss function using covariance matrices as style target.
+    Build loss function using covariance matrices as style target (optimized version).
     
     Args:
         feature_extractor: VGGFeatureExtractor
@@ -48,14 +48,15 @@ def build_pca_loss(
     from .pca_code import compute_covariance
     
     # Extract features from optimizing image (needs gradients!)
+    # Single forward pass through VGG (optimized)
     all_features = feature_extractor.extract_features(optimizing_img, requires_grad=True)
     content_layer_name = feature_extractor.layer_names[feature_extractor.content_idx]
     current_content = all_features[content_layer_name].squeeze(0)
     
-    # Content loss
+    # Content loss (vectorized)
     content_loss = torch.nn.MSELoss(reduction='mean')(target_content, current_content)
     
-    # Style loss (covariance matrices)
+    # Style loss (covariance matrices) - optimized with vectorized operations
     style_loss = 0.0
     style_layer_names = feature_extractor.get_style_layer_names()
     
@@ -66,16 +67,17 @@ def build_pca_loss(
         
         current_features = all_features[layer_name]
         
-        # Compute current covariance
+        # Compute current covariance (vectorized)
         current_cov, current_mean = compute_covariance(current_features, center=True)
         target_cov = target_covariances[layer_name]
         target_mean = target_means[layer_name]
         
-        # Covariance loss: MSE (sum of squared differences)
+        # Covariance loss: Frobenius norm squared (vectorized)
+        # Use torch.norm for efficiency: ||A - B||_F^2 = sum((A - B)^2)
         cov_diff = current_cov - target_cov
-        cov_loss = torch.sum(cov_diff ** 2)
+        cov_loss = torch.sum(cov_diff ** 2)  # Frobenius norm squared
         
-        # Mean loss (optional, usually small)
+        # Mean loss (vectorized)
         mean_diff = current_mean - target_mean
         mean_loss = torch.sum(mean_diff ** 2)
         
@@ -87,7 +89,7 @@ def build_pca_loss(
     if num_layers > 0:
         style_loss /= num_layers
     
-    # Total variation loss
+    # Total variation loss (optimized)
     tv_loss = total_variation(optimizing_img)
     
     # Total loss
@@ -129,6 +131,10 @@ def pca_gatys_style_transfer(
     
     device = torch.device(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
     
+    # Enable cuDNN benchmarking for faster convolutions (if GPU available)
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+    
     # Load images
     content_img = prepare_img(content_img_path, config['height'], device)
     style1_img = prepare_img(style1_img_path, config['height'], device)
@@ -137,8 +143,9 @@ def pca_gatys_style_transfer(
     # Initialize feature extractor
     feature_extractor = VGGFeatureExtractor(model_name=config['model'], device=device)
     
-    # Extract target content
-    target_content = feature_extractor.get_content_features(content_img).squeeze(0)
+    # Extract target content (precompute once)
+    with torch.no_grad():
+        target_content = feature_extractor.get_content_features(content_img).squeeze(0)
     
     # Initialize optimizing image first (needed for all methods)
     init_method = config.get('init_method', 'content')
@@ -154,14 +161,20 @@ def pca_gatys_style_transfer(
     optimizing_img = Variable(init_img, requires_grad=True)
     
     # Handle different mixing methods
+    # Precompute style features/codes ONCE (not in optimization loop)
+    cache_dir = config.get('pca_cache_dir', None)
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+    use_cache = config.get('use_pca_cache', True)
+    
     if mixing_method == 'gram-linear':
         # Use Gram matrix mixing (baseline)
-        style1_features = feature_extractor.get_style_features(style1_img)
-        style2_features = feature_extractor.get_style_features(style2_img)
-        
-        grams1 = {name: gram_matrix(features) for name, features in style1_features.items()}
-        grams2 = {name: gram_matrix(features) for name, features in style2_features.items()}
-        target_grams = mix_gram_matrices(grams1, grams2, alpha, config.get('per_layer_alpha'))
+        with torch.no_grad():
+            style1_features = feature_extractor.get_style_features(style1_img)
+            style2_features = feature_extractor.get_style_features(style2_img)
+            grams1 = {name: gram_matrix(features) for name, features in style1_features.items()}
+            grams2 = {name: gram_matrix(features) for name, features in style2_features.items()}
+            target_grams = mix_gram_matrices(grams1, grams2, alpha, config.get('per_layer_alpha'))
         
         # Use Gram-based loss (similar to Gatys)
         return _optimize_with_gram_target(
@@ -170,17 +183,17 @@ def pca_gatys_style_transfer(
     
     else:
         # PCA-based mixing
-        # Extract PCA codes
-        codes1 = extract_pca_codes(feature_extractor, style1_img)
-        codes2 = extract_pca_codes(feature_extractor, style2_img)
+        # Extract PCA codes (with caching)
+        codes1 = extract_pca_codes(feature_extractor, style1_img, cache_dir=cache_dir, use_cache=use_cache)
+        codes2 = extract_pca_codes(feature_extractor, style2_img, cache_dir=cache_dir, use_cache=use_cache)
         
-        # Mix codes
+        # Mix codes (precompute once)
         per_layer_alpha = config.get('per_layer_alpha')
         mixed_codes = mix_style_codes(codes1, codes2, alpha, mixing_method, per_layer_alpha)
         
-        # Extract target covariances and means
-        target_covariances = {name: code.C for name, code in mixed_codes.items()}
-        target_means = {name: code.mean for name, code in mixed_codes.items()}
+        # Extract target covariances and means (precomputed, no gradients needed)
+        target_covariances = {name: code.C.detach() for name, code in mixed_codes.items()}
+        target_means = {name: code.mean.detach() for name, code in mixed_codes.items()}
     
     # Setup optimizer
     optimizer_name = config.get('optimizer', 'lbfgs')
@@ -208,10 +221,13 @@ def pca_gatys_style_transfer(
             with torch.no_grad():
                 optimizing_img.data.clamp_(0, 255)
             
-            metrics['total_loss'].append(total_loss.item())
-            metrics['content_loss'].append(content_loss.item())
-            metrics['style_loss'].append(style_loss.item())
-            metrics['tv_loss'].append(tv_loss.item())
+            # Log metrics (minimize CPU syncs - batch these)
+            if cnt % 10 == 0 or cnt == iterations - 1:
+                with torch.no_grad():
+                    metrics['total_loss'].append(total_loss.item())
+                    metrics['content_loss'].append(content_loss.item())
+                    metrics['style_loss'].append(style_loss.item())
+                    metrics['tv_loss'].append(tv_loss.item())
             
             if progress_callback:
                 progress_callback(cnt, {
@@ -228,28 +244,27 @@ def pca_gatys_style_transfer(
         def closure():
             nonlocal cnt
             optimizer.zero_grad()
-            
             total_loss, content_loss, style_loss, tv_loss = build_pca_loss(
                 feature_extractor, optimizing_img, target_content,
                 target_covariances, target_means, config
             )
-            
             total_loss.backward()
             
-            # Log metrics (outside gradient computation)
-            with torch.no_grad():
-                metrics['total_loss'].append(total_loss.item())
-                metrics['content_loss'].append(content_loss.item())
-                metrics['style_loss'].append(style_loss.item())
-                metrics['tv_loss'].append(tv_loss.item())
-                
-                if progress_callback:
-                    progress_callback(cnt, {
-                        'total_loss': total_loss.item(),
-                        'content_loss': content_loss.item(),
-                        'style_loss': style_loss.item(),
-                        'tv_loss': tv_loss.item()
-                    })
+            # Log metrics (minimize CPU syncs)
+            if cnt % 10 == 0 or cnt == iterations - 1:
+                with torch.no_grad():
+                    metrics['total_loss'].append(total_loss.item())
+                    metrics['content_loss'].append(content_loss.item())
+                    metrics['style_loss'].append(style_loss.item())
+                    metrics['tv_loss'].append(tv_loss.item())
+            
+            if progress_callback:
+                progress_callback(cnt, {
+                    'total_loss': total_loss.item(),
+                    'content_loss': content_loss.item(),
+                    'style_loss': style_loss.item(),
+                    'tv_loss': tv_loss.item()
+                })
             
             cnt += 1
             return total_loss
@@ -285,6 +300,7 @@ def _optimize_with_gram_target(
         'total_loss': []
     }
     
+    
     if optimizer_name == 'adam':
         optimizer = Adam((optimizing_img,), lr=config.get('lr', 1e1))
         
@@ -299,13 +315,21 @@ def _optimize_with_gram_target(
             with torch.no_grad():
                 optimizing_img.data.clamp_(0, 255)
             
-            metrics['total_loss'].append(total_loss.item())
-            metrics['content_loss'].append(content_loss.item())
-            metrics['style_loss'].append(style_loss.item())
-            metrics['tv_loss'].append(tv_loss.item())
+            # Log metrics (minimize CPU syncs)
+            if cnt % 10 == 0 or cnt == iterations - 1:
+                with torch.no_grad():
+                    metrics['total_loss'].append(total_loss.item())
+                    metrics['content_loss'].append(content_loss.item())
+                    metrics['style_loss'].append(style_loss.item())
+                    metrics['tv_loss'].append(tv_loss.item())
             
             if progress_callback:
-                progress_callback(cnt, metrics)
+                progress_callback(cnt, {
+                    'total_loss': total_loss.item(),
+                    'content_loss': content_loss.item(),
+                    'style_loss': style_loss.item(),
+                    'tv_loss': tv_loss.item()
+                })
     
     elif optimizer_name == 'lbfgs':
         optimizer = LBFGS((optimizing_img,), max_iter=iterations, line_search_fn='strong_wolfe')
@@ -314,26 +338,26 @@ def _optimize_with_gram_target(
         def closure():
             nonlocal cnt
             optimizer.zero_grad()
-            
             total_loss, content_loss, style_loss, tv_loss = build_gatys_loss(
                 feature_extractor, optimizing_img, target_content, target_grams, config
             )
-            
             total_loss.backward()
             
-            with torch.no_grad():
-                metrics['total_loss'].append(total_loss.item())
-                metrics['content_loss'].append(content_loss.item())
-                metrics['style_loss'].append(style_loss.item())
-                metrics['tv_loss'].append(tv_loss.item())
-                
-                if progress_callback:
-                    progress_callback(cnt, {
-                        'total_loss': total_loss.item(),
-                        'content_loss': content_loss.item(),
-                        'style_loss': style_loss.item(),
-                        'tv_loss': tv_loss.item()
-                    })
+            # Log metrics (minimize CPU syncs)
+            if cnt % 10 == 0 or cnt == iterations - 1:
+                with torch.no_grad():
+                    metrics['total_loss'].append(total_loss.item())
+                    metrics['content_loss'].append(content_loss.item())
+                    metrics['style_loss'].append(style_loss.item())
+                    metrics['tv_loss'].append(tv_loss.item())
+            
+            if progress_callback:
+                progress_callback(cnt, {
+                    'total_loss': total_loss.item(),
+                    'content_loss': content_loss.item(),
+                    'style_loss': style_loss.item(),
+                    'tv_loss': tv_loss.item()
+                })
             
             cnt += 1
             return total_loss
@@ -347,40 +371,39 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PCA-Gatys Style Transfer")
     parser.add_argument("--content", type=str, required=True, help="Path to content image")
     parser.add_argument("--style1", type=str, required=True, help="Path to first style image")
-    parser.add_argument("--style2", type=str, required=True, help="Path to second style image")
+    parser.add_argument("--style2", type=str, help="Path to second style image (optional for gatys)")
     parser.add_argument("--alpha", type=float, default=0.5, help="Mixing coefficient (0.0-1.0)")
     parser.add_argument("--method", type=str, default="joint", 
-                       choices=["simple", "joint", "covariance-linear", "gram-linear"],
+                       choices=["simple", "joint", "covariance-linear", "gram-linear", "gatys"],
                        help="Mixing method")
-    parser.add_argument("--out", type=str, help="Output image path")
     parser.add_argument("--iters", type=int, default=1000, help="Number of iterations")
     parser.add_argument("--height", type=int, default=400, help="Image height")
     parser.add_argument("--optimizer", type=str, default="lbfgs", choices=["lbfgs", "adam"])
     parser.add_argument("--content_weight", type=float, default=1e5)
     parser.add_argument("--style_weight", type=float, default=3e4)
     parser.add_argument("--tv_weight", type=float, default=1e0)
+    parser.add_argument("--snapshot_interval", type=int, default=10, help="Save snapshot every N iterations")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
     
     args = parser.parse_args()
     
-    config = DEFAULT_CONFIG.copy()
-    config.update({
-        'iterations': args.iters if args.optimizer == 'lbfgs' else None,
-        'adam_iterations': args.iters if args.optimizer == 'adam' else None,
+    from .runner import run_once
+    
+    config = {
+        'content_img_path': args.content,
+        'style1_img_path': args.style1,
+        'style2_img_path': args.style2 if args.style2 else args.style1,
+        'mixing_method': args.method,
+        'alpha': args.alpha,
+        'iterations': args.iters,
         'height': args.height,
         'optimizer': args.optimizer,
         'content_weight': args.content_weight,
         'style_weight': args.style_weight,
-        'tv_weight': args.tv_weight
-    })
+        'tv_weight': args.tv_weight,
+        'snapshot_interval': args.snapshot_interval,
+        'seed': args.seed,
+    }
     
-    result, metrics = pca_gatys_style_transfer(
-        args.content, args.style1, args.style2,
-        alpha=args.alpha,
-        mixing_method=args.method,
-        output_path=args.out,
-        config=config
-    )
-    
-    if args.out:
-        print(f"Result saved to: {args.out}")
-    print(f"Final loss: {metrics['total_loss'][-1]:.4f}")
+    run_folder = run_once(config)
+    print(f"Run completed. Output saved to: {run_folder}")

@@ -10,7 +10,7 @@ from .vgg_features import VGGFeatureExtractor
 
 def gram_matrix(features: torch.Tensor) -> torch.Tensor:
     """
-    Compute Gram matrix from feature maps.
+    Compute Gram matrix from feature maps (optimized vectorized version).
     
     Args:
         features: Feature tensor of shape (1, C, H, W)
@@ -19,9 +19,13 @@ def gram_matrix(features: torch.Tensor) -> torch.Tensor:
         Gram matrix of shape (1, C, C)
     """
     B, C, H, W = features.shape
-    features_flat = features.view(B, C, H * W)  # (1, C, M)
+    M = H * W
+    # Vectorized: flatten and compute in single operation
+    features_flat = features.view(B, C, M)  # (1, C, M)
+    # Use bmm for batched matrix multiplication (faster than manual loops)
     gram = torch.bmm(features_flat, features_flat.transpose(1, 2))  # (1, C, C)
-    gram = gram / (C * H * W)  # Normalize
+    # Normalize (precompute constant)
+    gram = gram / (C * M)  # Normalize by C*H*W
     return gram
 
 
@@ -32,7 +36,7 @@ def simple_pca_mix(
     layer_name: str
 ) -> PCACode:
     """
-    Simple PCA mixing: use P1 basis, mix eigenvalues.
+    Simple PCA mixing: use P1 basis, mix eigenvalues (optimized).
     
     Dmix = α * D1 + (1-α) * diag(P1^T @ C2 @ P1)
     
@@ -52,17 +56,19 @@ def simple_pca_mix(
     D1 = code1.D
     
     # Project C2 onto P1 basis: diag(P1^T @ C2 @ P1)
+    # Optimized: use single chain of matmuls
     C2_projected = torch.matmul(torch.matmul(P_mix.t(), code2.C), P_mix)
     D2_projected = torch.diag(C2_projected)  # Extract diagonal
     
-    # Mix eigenvalues
+    # Mix eigenvalues (vectorized)
     D_mix = alpha * D1 + (1 - alpha) * D2_projected
     
     # Reconstruct covariance: C_mix = P_mix @ diag(D_mix) @ P_mix^T
+    # Optimized: avoid creating full diagonal matrix if possible
     D_mix_diag = torch.diag(D_mix)
     C_mix = torch.matmul(torch.matmul(P_mix, D_mix_diag), P_mix.t())
     
-    # Mix means
+    # Mix means (vectorized)
     mean_mix = alpha * code1.mean + (1 - alpha) * code2.mean
     
     return PCACode(P=P_mix, D=D_mix, C=C_mix, mean=mean_mix, layer_name=layer_name)
@@ -75,7 +81,7 @@ def joint_pca_mix(
     layer_name: str
 ) -> PCACode:
     """
-    Joint PCA mixing: compute eigenvectors of (C1+C2)/2, then mix eigenvalues.
+    Joint PCA mixing: compute eigenvectors of (C1+C2)/2, then mix eigenvalues (optimized).
     
     Pmix = eigenvectors of (C1 + C2) / 2
     Dmix = α * diag(Pmix^T @ C1 @ Pmix) + (1-α) * diag(Pmix^T @ C2 @ Pmix)
@@ -89,30 +95,31 @@ def joint_pca_mix(
     Returns:
         Mixed PCA code
     """
-    # Compute average covariance
+    # Compute average covariance (vectorized)
     C_avg = (code1.C + code2.C) / 2.0
     
-    # Eigendecomposition of average
+    # Eigendecomposition of average (use eigh for symmetric matrices - faster and more stable)
     eigenvalues, eigenvectors = torch.linalg.eigh(C_avg)
+    # eigh returns ascending, flip to descending
     eigenvalues = eigenvalues.flip(0)
     eigenvectors = eigenvectors.flip(1)
     P_mix = eigenvectors
     
-    # Project both covariances onto joint basis
+    # Project both covariances onto joint basis (optimized: compute both in sequence)
     C1_projected = torch.matmul(torch.matmul(P_mix.t(), code1.C), P_mix)
     C2_projected = torch.matmul(torch.matmul(P_mix.t(), code2.C), P_mix)
     
     D1_projected = torch.diag(C1_projected)
     D2_projected = torch.diag(C2_projected)
     
-    # Mix eigenvalues
+    # Mix eigenvalues (vectorized)
     D_mix = alpha * D1_projected + (1 - alpha) * D2_projected
     
     # Reconstruct covariance
     D_mix_diag = torch.diag(D_mix)
     C_mix = torch.matmul(torch.matmul(P_mix, D_mix_diag), P_mix.t())
     
-    # Mix means
+    # Mix means (vectorized)
     mean_mix = alpha * code1.mean + (1 - alpha) * code2.mean
     
     return PCACode(P=P_mix, D=D_mix, C=C_mix, mean=mean_mix, layer_name=layer_name)

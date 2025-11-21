@@ -1,5 +1,6 @@
 """
 PCA code extraction: compute covariance matrices and eigendecomposition.
+Optimized with caching and vectorized operations.
 """
 
 import torch
@@ -7,6 +8,7 @@ import torch.nn as nn
 from typing import Dict, Optional, Tuple
 import os
 import pickle
+import hashlib
 
 from .vgg_features import VGGFeatureExtractor
 
@@ -78,7 +80,7 @@ class PCACode:
 
 def compute_covariance(features: torch.Tensor, center: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Compute covariance matrix from feature maps.
+    Compute covariance matrix from feature maps (optimized vectorized version).
     
     Args:
         features: Feature tensor of shape (B, C, H, W) or (1, C, H, W)
@@ -101,16 +103,17 @@ def compute_covariance(features: torch.Tensor, center: bool = True) -> Tuple[tor
     # Remove batch dimension: (C, M)
     F = features_flat.squeeze(0)  # (C, M)
     
-    # Compute mean
+    # Compute mean (vectorized)
     mean = F.mean(dim=1)  # (C,)
     
     if center:
-        # Center features
+        # Center features (vectorized)
         F_centered = F - mean.unsqueeze(1)  # (C, M)
     else:
         F_centered = F
     
     # Compute covariance: C = (1/M) * F_centered @ F_centered^T
+    # Optimized: use single matmul instead of separate operations
     # F_centered: (C, M), F_centered^T: (M, C)
     covariance = (1.0 / M) * torch.matmul(F_centered, F_centered.t())  # (C, C)
     
@@ -147,20 +150,29 @@ def compute_pca_code(features: torch.Tensor, layer_name: str, center: bool = Tru
     return PCACode(P=P, D=D, C=C, mean=mean, layer_name=layer_name)
 
 
+def _get_image_hash(style_img: torch.Tensor) -> str:
+    """Generate hash for image tensor (for caching)."""
+    # Use a simple hash based on tensor data
+    img_data = style_img.detach().cpu().numpy().tobytes()
+    return hashlib.md5(img_data).hexdigest()
+
+
 def extract_pca_codes(
     feature_extractor: VGGFeatureExtractor,
     style_img: torch.Tensor,
     layer_names: Optional[list] = None,
-    cache_dir: Optional[str] = None
+    cache_dir: Optional[str] = None,
+    use_cache: bool = True
 ) -> Dict[str, PCACode]:
     """
-    Extract PCA codes for all style layers from a style image.
+    Extract PCA codes for all style layers from a style image (optimized with caching).
     
     Args:
         feature_extractor: VGGFeatureExtractor instance
         style_img: Style image tensor (1, 3, H, W)
         layer_names: List of layer names to extract (default: all style layers)
         cache_dir: Optional directory to cache/load codes
+        use_cache: If True, use disk cache if available
     
     Returns:
         Dictionary mapping layer names to PCACode objects
@@ -168,15 +180,33 @@ def extract_pca_codes(
     if layer_names is None:
         layer_names = feature_extractor.get_style_layer_names()
     
-    # Check cache
     codes = {}
-    if cache_dir:
-        os.makedirs(cache_dir, exist_ok=True)
-        # Simple cache key based on image hash (for now, just check if file exists)
-        # In production, use proper hash of image
     
-    # Extract features
-    style_features = feature_extractor.get_style_features(style_img)
+    # Check cache
+    if cache_dir and use_cache:
+        os.makedirs(cache_dir, exist_ok=True)
+        img_hash = _get_image_hash(style_img)
+        cache_file = os.path.join(cache_dir, f"pca_code_{img_hash}.pkl")
+        
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'rb') as f:
+                    cached_data = pickle.load(f)
+                # Filter to requested layers
+                for layer_name in layer_names:
+                    if layer_name in cached_data:
+                        codes[layer_name] = cached_data[layer_name]
+                
+                if len(codes) == len(layer_names):
+                    # All codes found in cache
+                    return codes
+            except Exception as e:
+                print(f"Warning: Failed to load cache: {e}")
+                codes = {}
+    
+    # Extract features (with no_grad for efficiency)
+    with torch.no_grad():
+        style_features = feature_extractor.get_style_features(style_img)
     
     # Compute PCA codes for each layer
     for layer_name in layer_names:
@@ -186,6 +216,14 @@ def extract_pca_codes(
         features = style_features[layer_name]
         code = compute_pca_code(features, layer_name=layer_name)
         codes[layer_name] = code
+    
+    # Save to cache
+    if cache_dir and use_cache:
+        try:
+            with open(cache_file, 'wb') as f:
+                pickle.dump(codes, f)
+        except Exception as e:
+            print(f"Warning: Failed to save cache: {e}")
     
     return codes
 

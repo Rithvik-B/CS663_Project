@@ -49,6 +49,10 @@ DEFAULT_CONFIG: Dict = {
     # Saving
     'saving_freq': -1,  # -1 = only final, >0 = save every N iterations
     'save_intermediate': False,
+    
+    # Performance optimizations
+    'use_pca_cache': True,  # Enable PCA code caching
+    'pca_cache_dir': 'data/pca_cache',  # Directory for PCA code cache
 }
 
 # ImageNet normalization constants (matching existing repo)
