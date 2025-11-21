@@ -393,7 +393,8 @@ def main():
                     
                     df, grid_paths = run_alpha_grid(
                         content_path, style1_path, style2_path,
-                        alphas, selected_methods, output_dir, config,
+                        alphas, selected_methods, output_dir,
+                        config=config,
                         progress_callback=batch_progress_callback
                     )
                     

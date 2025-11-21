@@ -4,7 +4,7 @@ Orchestrates batch runs for grids and metric CSV output.
 
 import os
 import time
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Callable
 import pandas as pd
 from pathlib import Path
 
@@ -26,7 +26,7 @@ def run_alpha_grid(
     output_dir: str,
     config: Optional[Dict] = None,
     compute_metrics: bool = True,
-    progress_callback: Optional[callable] = None
+    progress_callback: Optional[Callable] = None
 ) -> Tuple[pd.DataFrame, Dict[str, str]]:
     """
     Run style transfer across multiple alpha values and methods, create grids.
