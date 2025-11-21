@@ -292,38 +292,37 @@ def run_once(config: Dict) -> pathlib.Path:
         
         callback.set_reference_images(content_img, style1_img, style2_img)
         
-    # Determine method (handle UI naming: pca_joint -> joint, pca_simple -> simple)
-    mixing_method = config.get('mixing_method', 'gatys')
-    if mixing_method == 'pca_joint':
-        mixing_method = 'joint'
-    elif mixing_method == 'pca_simple':
-        mixing_method = 'simple'
-    
-    # Run style transfer with exact iteration control
-    if mixing_method == 'gatys' or not config.get('style2_img_path'):
-        result, metrics = _run_gatys_with_callback(
-            config['content_img_path'],
-            config['style1_img_path'],
-            callback,
-            transfer_config
-        )
-    else:
-        result, metrics = _run_pca_with_callback(
-            config['content_img_path'],
-            config['style1_img_path'],
-            config['style2_img_path'],
-            config.get('alpha', 0.5),
-            mixing_method,
-            callback,
-            transfer_config
-        )
+        # Determine method (handle UI naming: pca_joint -> joint, pca_simple -> simple)
+        mixing_method = config.get('mixing_method', 'gatys')
+        if mixing_method == 'pca_joint':
+            mixing_method = 'joint'
+        elif mixing_method == 'pca_simple':
+            mixing_method = 'simple'
+        
+        # Run style transfer with exact iteration control
+        if mixing_method == 'gatys' or not config.get('style2_img_path'):
+            result, metrics = _run_gatys_with_callback(
+                config['content_img_path'],
+                config['style1_img_path'],
+                callback,
+                transfer_config
+            )
+        else:
+            result, metrics = _run_pca_with_callback(
+                config['content_img_path'],
+                config['style1_img_path'],
+                config['style2_img_path'],
+                config.get('alpha', 0.5),
+                mixing_method,
+                callback,
+                transfer_config
+            )
         
         # Save final image (always saved as iter_{max_iters:03d}.png)
         max_iters = config.get('iterations', 1000)
         _save_snapshot(run_folder, max_iters, result)
         
         # Compute and save final metrics
-        max_iters = config.get('iterations', 1000)
         final_metrics = {
             'iteration': max_iters,
             'elapsed_s': time.time() - callback.start_time,

@@ -1,0 +1,14 @@
+{
+  "content_img_path": "data\\temp\\content_content_figures.jpg",
+  "style1_img_path": "data\\temp\\style1_style2_mosaic.jpg",
+  "style2_img_path": "data\\temp\\style2_style1_ben_giles.jpg",
+  "mixing_method": "gatys",
+  "alpha": 1.0,
+  "seed": 42,
+  "iterations_requested": 100,
+  "snapshot_interval": 10,
+  "device": "cpu",
+  "start_ts_utc": "2025-11-21T02:02:15.966719Z",
+  "end_ts_utc": null,
+  "iterations_completed": null
+}
