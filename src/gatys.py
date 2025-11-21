@@ -23,7 +23,11 @@ except ImportError:
 
 from .vgg_features import VGGFeatureExtractor
 from .io_utils import prepare_img, save_image, tensor_to_image
-from .config import DEFAULT_CONFIG
+from .config import DEFAULT_CONFIG, get_project_root
+from .save_utils import save_result_with_metadata, append_to_metrics_csv
+from .metrics import MetricsComputer
+from pathlib import Path
+import time
 
 
 def gram_matrix(x: torch.Tensor, should_normalize: bool = True) -> torch.Tensor:
@@ -172,7 +176,8 @@ def gatys_style_transfer(
         'content_loss': [],
         'style_loss': [],
         'tv_loss': [],
-        'total_loss': []
+        'total_loss': [],
+        'start_time': time.time()
     }
     
     if optimizer_name == 'adam':
@@ -240,6 +245,55 @@ def gatys_style_transfer(
     # Final result
     result = optimizing_img.detach()
     
+    # Auto-save final image and metadata
+    runtime = time.time() - (metrics.get('start_time', time.time()))
+    
+    # Prepare metadata
+    metadata = {
+        'mode': 'baseline',
+        'method': 'gatys',
+        'content_image': content_img_path,
+        'style_image': style_img_path,
+        'hyperparameters': {
+            'content_weight': config.get('content_weight', 1e5),
+            'style_weight': config.get('style_weight', 3e4),
+            'tv_weight': config.get('tv_weight', 1e0),
+            'optimizer': config.get('optimizer', 'lbfgs'),
+            'iterations': len(metrics.get('total_loss', [])),
+            'init_method': config.get('init_method', 'content'),
+            'height': config.get('height', 400)
+        },
+        'final_losses': {
+            'total_loss': metrics['total_loss'][-1] if metrics['total_loss'] else None,
+            'content_loss': metrics['content_loss'][-1] if metrics['content_loss'] else None,
+            'style_loss': metrics['style_loss'][-1] if metrics['style_loss'] else None,
+            'tv_loss': metrics['tv_loss'][-1] if metrics['tv_loss'] else None
+        },
+        'runtime_seconds': runtime
+    }
+    
+    # Compute additional metrics if possible
+    try:
+        metrics_computer = MetricsComputer(device=device, model_name=config.get('model', 'vgg19'))
+        content_img_tensor = prepare_img(content_img_path, config.get('height', 400), device)
+        style_img_tensor = prepare_img(style_img_path, config.get('height', 400), device)
+        all_metrics = metrics_computer.compute_all_metrics(result, content_img_tensor, style_img_tensor, None, runtime)
+        metadata.update(all_metrics)
+    except Exception as e:
+        # If metrics fail, continue without them
+        pass
+    
+    # Auto-save with deterministic filename
+    image_path, json_path = save_result_with_metadata(result, metadata)
+    
+    # Append to CSV
+    try:
+        append_to_metrics_csv(metadata)
+    except Exception as e:
+        # Log but don't fail
+        print(f"Warning: Could not append to CSV: {e}")
+    
+    # Legacy support: if output_path provided, also save there
     if output_path:
         save_image(result, output_path, denormalize=True)
     

@@ -7,6 +7,8 @@ import torch.nn as nn
 from typing import Dict, Optional, Tuple
 import os
 import pickle
+import hashlib
+from pathlib import Path
 
 from .vgg_features import VGGFeatureExtractor
 
@@ -147,20 +149,32 @@ def compute_pca_code(features: torch.Tensor, layer_name: str, center: bool = Tru
     return PCACode(P=P, D=D, C=C, mean=mean, layer_name=layer_name)
 
 
+def _get_image_hash(img_tensor: torch.Tensor) -> str:
+    """Generate hash from image tensor for caching."""
+    # Use a small sample of pixels for fast hashing
+    img_np = img_tensor.detach().cpu().numpy()
+    # Sample every 10th pixel
+    sample = img_np[0, :, ::10, ::10].tobytes()
+    return hashlib.md5(sample).hexdigest()
+
+
 def extract_pca_codes(
     feature_extractor: VGGFeatureExtractor,
     style_img: torch.Tensor,
     layer_names: Optional[list] = None,
-    cache_dir: Optional[str] = None
+    cache_dir: Optional[str] = None,
+    style_img_path: Optional[str] = None
 ) -> Dict[str, PCACode]:
     """
     Extract PCA codes for all style layers from a style image.
+    Supports caching to avoid recomputation.
     
     Args:
         feature_extractor: VGGFeatureExtractor instance
         style_img: Style image tensor (1, 3, H, W)
         layer_names: List of layer names to extract (default: all style layers)
         cache_dir: Optional directory to cache/load codes
+        style_img_path: Optional path to style image (for cache key)
     
     Returns:
         Dictionary mapping layer names to PCACode objects
@@ -168,12 +182,34 @@ def extract_pca_codes(
     if layer_names is None:
         layer_names = feature_extractor.get_style_layer_names()
     
-    # Check cache
     codes = {}
+    
+    # Try to load from cache
     if cache_dir:
         os.makedirs(cache_dir, exist_ok=True)
-        # Simple cache key based on image hash (for now, just check if file exists)
-        # In production, use proper hash of image
+        
+        # Generate cache key
+        if style_img_path:
+            cache_key = hashlib.md5(style_img_path.encode()).hexdigest()
+        else:
+            cache_key = _get_image_hash(style_img)
+        
+        cache_file = os.path.join(cache_dir, f"pca_code_{cache_key}.pkl")
+        
+        # Try loading cached codes
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'rb') as f:
+                    cached_data = pickle.load(f)
+                    # Check if all layers are present
+                    if all(layer in cached_data for layer in layer_names):
+                        device = style_img.device
+                        codes = {layer: cached_data[layer].to_device(device) 
+                                for layer in layer_names}
+                        return codes
+            except Exception as e:
+                # If cache load fails, recompute
+                pass
     
     # Extract features
     style_features = feature_extractor.get_style_features(style_img)
@@ -186,6 +222,19 @@ def extract_pca_codes(
         features = style_features[layer_name]
         code = compute_pca_code(features, layer_name=layer_name)
         codes[layer_name] = code
+    
+    # Save to cache if cache_dir provided
+    if cache_dir and codes:
+        try:
+            cache_file = os.path.join(cache_dir, f"pca_code_{cache_key}.pkl")
+            # Move to CPU for caching
+            codes_cpu = {layer: code.to_device(torch.device('cpu')) 
+                        for layer, code in codes.items()}
+            with open(cache_file, 'wb') as f:
+                pickle.dump(codes_cpu, f)
+        except Exception as e:
+            # If cache save fails, continue without caching
+            pass
     
     return codes
 

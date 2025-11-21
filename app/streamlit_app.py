@@ -21,9 +21,10 @@ if project_root not in sys.path:
 from src.pca_gatys import pca_gatys_style_transfer
 from src.gatys import gatys_style_transfer
 from src.metrics import MetricsComputer
-from src.io_utils import load_image, save_image, tensor_to_image, create_comparison_grid
+from src.io_utils import load_image, save_image, tensor_to_image, create_comparison_grid, prepare_img
 from src.config import DEFAULT_CONFIG, get_project_root, get_data_path
 from src.utils import get_device, set_seed
+import json
 
 
 # Page config
@@ -221,49 +222,97 @@ def main():
                         progress_bar.progress(1.0)
                         status_text.text(f"Complete! Runtime: {runtime:.2f}s")
                         
-                        # Display result
-                        st.success("Style transfer complete!")
+                        # Result is auto-saved by the function, now load and display
+                        st.success("✅ Style transfer complete! Result auto-saved.")
                         
-                        # Convert to display format
-                        result_np = tensor_to_image(result, denormalize=True)
+                        # Find the saved file (most recent in outputs directory)
+                        output_dir = get_data_path("outputs")
+                        output_files = sorted(Path(output_dir).glob("*.jpg"), key=os.path.getmtime, reverse=True)
                         
-                        # Show comparison
-                        col1, col2 = st.columns(2)
-                        with col1:
+                        if output_files:
+                            saved_image_path = str(output_files[0])
+                            saved_json_path = saved_image_path.replace('.jpg', '.json')
+                            
+                            # Display result
+                            result_np = tensor_to_image(result, denormalize=True)
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.image(result_np, caption="Generated Result", use_container_width=True)
+                                
+                                # Show saved location
+                                st.info(f"**Saved to:** `{saved_image_path}`")
+                                
+                                # Download button
+                                with open(saved_image_path, 'rb') as f:
+                                    st.download_button(
+                                        "📥 Download Image",
+                                        f.read(),
+                                        os.path.basename(saved_image_path),
+                                        "image/jpeg"
+                                    )
+                            
+                            with col2:
+                                # Load and display metadata
+                                if os.path.exists(saved_json_path):
+                                    with open(saved_json_path, 'r') as f:
+                                        metadata = json.load(f)
+                                    
+                                    st.subheader("📊 Metrics & Metadata")
+                                    
+                                    # Final losses
+                                    if 'final_losses' in metadata:
+                                        st.markdown("**Final Losses:**")
+                                        st.metric("Total Loss", f"{metadata['final_losses'].get('total_loss', 0):.2e}")
+                                        st.metric("Content Loss", f"{metadata['final_losses'].get('content_loss', 0):.2e}")
+                                        st.metric("Style Loss", f"{metadata['final_losses'].get('style_loss', 0):.2e}")
+                                    
+                                    # Content metrics
+                                    if 'lpips_content' in metadata:
+                                        st.markdown("**Content Similarity:**")
+                                        st.metric("LPIPS", f"{metadata.get('lpips_content', 0):.4f}")
+                                        st.metric("SSIM", f"{metadata.get('ssim_content', 0):.4f}")
+                                        st.metric("PSNR", f"{metadata.get('psnr_content', 0):.2f} dB")
+                                    
+                                    # Style distances
+                                    if 'gram_dist_style1_avg' in metadata:
+                                        st.markdown("**Style Distances:**")
+                                        st.metric("Gram dist (style1)", f"{metadata.get('gram_dist_style1_avg', 0):.2f}")
+                                    if 'gram_dist_style2_avg' in metadata:
+                                        st.metric("Gram dist (style2)", f"{metadata.get('gram_dist_style2_avg', 0):.2f}")
+                                    
+                                    # Runtime
+                                    st.metric("Runtime", f"{metadata.get('runtime_seconds', runtime):.2f}s")
+                                    
+                                    # Show JSON metadata
+                                    with st.expander("📄 View Full Metadata (JSON)"):
+                                        st.json(metadata)
+                                else:
+                                    # Fallback: compute metrics if JSON not found
+                                    metrics_computer = load_metrics_computer()
+                                    content_img = prepare_img(content_path, height, device)
+                                    style1_img = prepare_img(style1_path, height, device) if style1_path else None
+                                    style2_img = prepare_img(style2_path, height, device) if style2_path else None
+                                    
+                                    all_metrics = metrics_computer.compute_all_metrics(
+                                        result, content_img, style1_img, style2_img, runtime
+                                    )
+                                    
+                                    st.subheader("Metrics")
+                                    st.metric("LPIPS (content)", f"{all_metrics.get('lpips_content', 0):.4f}")
+                                    st.metric("SSIM (content)", f"{all_metrics.get('ssim_content', 0):.4f}")
+                                    st.metric("PSNR (content)", f"{all_metrics.get('psnr_content', 0):.2f} dB")
+                                    st.metric("Runtime", f"{runtime:.2f}s")
+                                    
+                                    if style1_img is not None:
+                                        st.metric("Gram dist (style1)", f"{all_metrics.get('gram_dist_style1_avg', 0):.2f}")
+                                    if style2_img is not None:
+                                        st.metric("Gram dist (style2)", f"{all_metrics.get('gram_dist_style2_avg', 0):.2f}")
+                        else:
+                            # Fallback if file not found
+                            result_np = tensor_to_image(result, denormalize=True)
                             st.image(result_np, caption="Generated Result", use_container_width=True)
-                        
-                        with col2:
-                            # Compute and display metrics
-                            metrics_computer = load_metrics_computer()
-                            
-                            from src.io_utils import prepare_img
-                            content_img = prepare_img(content_path, height, device)
-                            style1_img = prepare_img(style1_path, height, device) if style1_path else None
-                            style2_img = prepare_img(style2_path, height, device) if style2_path else None
-                            
-                            all_metrics = metrics_computer.compute_all_metrics(
-                                result, content_img, style1_img, style2_img, runtime
-                            )
-                            
-                            st.subheader("Metrics")
-                            st.metric("LPIPS (content)", f"{all_metrics.get('lpips_content', 0):.4f}")
-                            st.metric("SSIM (content)", f"{all_metrics.get('ssim_content', 0):.4f}")
-                            st.metric("PSNR (content)", f"{all_metrics.get('psnr_content', 0):.2f} dB")
-                            st.metric("Runtime", f"{runtime:.2f}s")
-                            
-                            if style1_img is not None:
-                                st.metric("Gram dist (style1)", f"{all_metrics.get('gram_dist_style1_avg', 0):.2f}")
-                            if style2_img is not None:
-                                st.metric("Gram dist (style2)", f"{all_metrics.get('gram_dist_style2_avg', 0):.2f}")
-                        
-                        # Save option
-                        if st.button("💾 Save Result"):
-                            output_dir = get_data_path("outputs")
-                            os.makedirs(output_dir, exist_ok=True)
-                            timestamp = int(time.time())
-                            output_path = os.path.join(output_dir, f"result_{timestamp}.jpg")
-                            save_image(result, output_path, denormalize=True)
-                            st.success(f"Saved to {output_path}")
+                            st.warning("Could not locate saved file, but result is available above.")
                     
                     except Exception as e:
                         st.error(f"Error: {str(e)}")

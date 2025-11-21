@@ -10,9 +10,11 @@ from pathlib import Path
 
 from .pca_gatys import pca_gatys_style_transfer
 from .gatys import gatys_style_transfer
-from .io_utils import create_alpha_grid, save_image, load_image, prepare_img
+from .io_utils import create_alpha_grid, save_image, load_image, prepare_img, tensor_to_image
 from .metrics import MetricsComputer
 from .config import DEFAULT_CONFIG, get_project_root
+from .save_utils import log_batch_run
+import time
 
 
 def run_alpha_grid(
@@ -74,55 +76,65 @@ def run_alpha_grid(
             
             start_time = time.time()
             
-            # Generate result
-            if method == 'gatys-style1':
-                result, _ = gatys_style_transfer(
-                    content_img_path, style1_img_path,
-                    output_path=None, config=config
-                )
-            elif method == 'gatys-style2':
-                result, _ = gatys_style_transfer(
-                    content_img_path, style2_img_path,
-                    output_path=None, config=config
-                )
-            else:
-                # Map method names
-                mixing_method_map = {
-                    'pca-joint': 'joint',
-                    'pca-simple': 'simple',
-                    'gram-linear': 'gram-linear',
-                    'cov-linear': 'covariance-linear'
-                }
-                mixing_method = mixing_method_map.get(method, 'joint')
+            # Generate result (auto-saves image + JSON + CSV)
+            try:
+                log_batch_run(f"Starting {method} with alpha={alpha:.2f} for {Path(content_img_path).name}")
                 
-                result, _ = pca_gatys_style_transfer(
-                    content_img_path, style1_img_path, style2_img_path,
-                    alpha=alpha, mixing_method=mixing_method,
-                    output_path=None, config=config
-                )
-            
-            runtime = time.time() - start_time
-            
-            # Save individual result
-            content_name = Path(content_img_path).stem
-            style1_name = Path(style1_img_path).stem
-            style2_name = Path(style2_img_path).stem
-            output_filename = f"{content_name}_{style1_name}_{style2_name}_{method}_alpha{alpha:.2f}.jpg"
-            output_path = os.path.join(output_dir, output_filename)
-            save_image(result, output_path, denormalize=True)
-            
-            # Compute metrics
-            if compute_metrics and metrics_computer:
-                metrics = metrics_computer.compute_all_metrics(
-                    result, content_img, style1_img, style2_img, runtime
-                )
-                metrics['method'] = method
-                metrics['alpha'] = alpha
-                metrics['content_image'] = Path(content_img_path).name
-                metrics['style1_image'] = Path(style1_img_path).name
-                metrics['style2_image'] = Path(style2_img_path).name
-                metrics['output_image'] = output_filename
-                all_results.append(metrics)
+                if method == 'gatys-style1':
+                    result, _ = gatys_style_transfer(
+                        content_img_path, style1_img_path,
+                        output_path=None, config=config
+                    )
+                elif method == 'gatys-style2':
+                    result, _ = gatys_style_transfer(
+                        content_img_path, style2_img_path,
+                        output_path=None, config=config
+                    )
+                else:
+                    # Map method names
+                    mixing_method_map = {
+                        'pca-joint': 'joint',
+                        'pca-simple': 'simple',
+                        'gram-linear': 'gram-linear',
+                        'cov-linear': 'covariance-linear'
+                    }
+                    mixing_method = mixing_method_map.get(method, 'joint')
+                    
+                    result, _ = pca_gatys_style_transfer(
+                        content_img_path, style1_img_path, style2_img_path,
+                        alpha=alpha, mixing_method=mixing_method,
+                        output_path=None, config=config
+                    )
+                
+                runtime = time.time() - start_time
+                
+                # Find the saved file (most recent)
+                output_base_dir = os.path.join(get_project_root(), 'data', 'outputs')
+                output_files = sorted(Path(output_base_dir).glob("*.jpg"), key=os.path.getmtime, reverse=True)
+                
+                if output_files:
+                    saved_path = str(output_files[0])
+                    log_batch_run(f"Completed {method} alpha={alpha:.2f}: {saved_path}")
+                else:
+                    log_batch_run(f"Warning: Could not find saved file for {method} alpha={alpha:.2f}", level="WARNING")
+                
+                # Compute additional metrics for grid display (if needed)
+                if compute_metrics and metrics_computer:
+                    metrics = metrics_computer.compute_all_metrics(
+                        result, content_img, style1_img, style2_img, runtime
+                    )
+                    metrics['method'] = method
+                    metrics['alpha'] = alpha
+                    metrics['content_image'] = Path(content_img_path).name
+                    metrics['style1_image'] = Path(style1_img_path).name
+                    metrics['style2_image'] = Path(style2_img_path).name
+                    all_results.append(metrics)
+                
+            except Exception as e:
+                error_msg = f"Error in {method} alpha={alpha:.2f}: {str(e)}"
+                log_batch_run(error_msg, level="ERROR")
+                print(error_msg)
+                continue
             
             method_results.append((alpha, result))
         
@@ -137,13 +149,16 @@ def run_alpha_grid(
         )
         grid_paths[method] = grid_path
     
-    # Create combined metrics DataFrame
+    # Create combined metrics DataFrame (additional metrics for grid, main CSV is auto-updated)
     if all_results:
         df = pd.DataFrame(all_results)
-        metrics_csv = os.path.join(output_dir, 'metrics_summary.csv')
+        metrics_csv = os.path.join(output_dir, 'metrics_summary_local.csv')
         df.to_csv(metrics_csv, index=False)
+        log_batch_run(f"Grid experiment complete. Local metrics saved to {metrics_csv}")
     else:
         df = pd.DataFrame()
+    
+    log_batch_run(f"Grid experiment finished: {len(methods)} methods × {len(alphas)} alphas")
     
     return df, grid_paths
 
@@ -158,6 +173,10 @@ def run_batch_experiment(
     output_dir: str,
     config: Optional[Dict] = None
 ) -> pd.DataFrame:
+    """
+    Run batch experiment across multiple content images and style pairs.
+    Each run auto-saves image + JSON + appends to CSV.
+    """
     """
     Run batch experiment across multiple content images and style pairs.
     
@@ -175,6 +194,11 @@ def run_batch_experiment(
         Combined metrics DataFrame
     """
     all_metrics = []
+    
+    log_batch_run(f"Starting batch experiment: {len(content_images)} contents × {len(style_pairs)} pairs × {len(alphas)} alphas × {len(methods)} methods")
+    
+    total_runs = len(content_images) * len(style_pairs) * len(alphas) * len(methods)
+    run_count = 0
     
     for content_img_name in content_images:
         content_img_path = os.path.join(content_dir, content_img_name)
@@ -194,22 +218,35 @@ def run_batch_experiment(
             combo_name = f"{Path(content_img_name).stem}_{Path(style1_name).stem}_{Path(style2_name).stem}"
             combo_output_dir = os.path.join(output_dir, combo_name)
             
+            log_batch_run(f"Processing: {combo_name}")
             print(f"\nProcessing: {combo_name}")
             
-            df, _ = run_alpha_grid(
-                content_img_path, style1_path, style2_path,
-                alphas, methods, combo_output_dir, config, compute_metrics=True
-            )
-            
-            if not df.empty:
-                all_metrics.append(df)
+            try:
+                df, _ = run_alpha_grid(
+                    content_img_path, style1_path, style2_path,
+                    alphas, methods, combo_output_dir, config, compute_metrics=True
+                )
+                
+                run_count += len(methods) * len(alphas)
+                log_batch_run(f"Completed {combo_name}: {run_count}/{total_runs} runs done")
+                
+                if not df.empty:
+                    all_metrics.append(df)
+            except Exception as e:
+                error_msg = f"Error processing {combo_name}: {str(e)}"
+                log_batch_run(error_msg, level="ERROR")
+                print(error_msg)
+                continue
     
-    # Combine all metrics
+    # Combine all metrics (main CSV is auto-updated by individual runs)
     if all_metrics:
         combined_df = pd.concat(all_metrics, ignore_index=True)
         combined_csv = os.path.join(output_dir, 'metrics_summary_all.csv')
         combined_df.to_csv(combined_csv, index=False)
+        log_batch_run(f"Batch experiment complete. Combined metrics: {combined_csv}")
+        log_batch_run(f"Total runs completed: {run_count}/{total_runs}")
         return combined_df
     else:
+        log_batch_run("Batch experiment finished with no metrics collected", level="WARNING")
         return pd.DataFrame()
 

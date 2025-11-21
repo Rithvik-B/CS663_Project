@@ -116,6 +116,7 @@ class VGGFeatureExtractor:
     def extract_features(self, img: torch.Tensor, requires_grad: bool = False) -> Dict[str, torch.Tensor]:
         """
         Extract features from image at all layers.
+        Optimized: single forward pass, no redundant computations.
         
         Args:
             img: Input tensor of shape (1, 3, H, W)
@@ -124,12 +125,14 @@ class VGGFeatureExtractor:
         Returns:
             Dictionary mapping layer names to feature tensors
         """
+        # Single forward pass - model returns all needed layers at once
         if requires_grad:
             outputs = self.model(img)
         else:
             with torch.no_grad():
                 outputs = self.model(img)
         
+        # Map outputs to layer names (already computed, just indexing)
         features = {}
         for idx, name in enumerate(self.layer_names):
             features[name] = outputs[idx]
